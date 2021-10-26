@@ -51,7 +51,7 @@ export default class List extends Command {
     const SFN = new SFNClient({});
 
     const ns = uuidv4();
-    const runningMachines = new Map<string, Promise<{ readonly arn: string, readonly status: string; }>>();
+    const runningMachines = new Map<string, Promise<{ readonly arn: string; readonly status: string }>>();
     const highWaterMark = 50;
     const lowWaterMark = Math.max(0, highWaterMark - fixBatchSize);
 
@@ -116,7 +116,7 @@ export default class List extends Command {
     }
   }
 
-  private awaitStateMachineEnd(SFN: SFNClient, executionArn: string): Promise<{readonly arn: string, readonly status: string}> {
+  private awaitStateMachineEnd(SFN: SFNClient, executionArn: string): Promise<{readonly arn: string; readonly status: string}> {
     return new Promise((ok, ko) => {
       const command = new DescribeExecutionCommand({ executionArn });
       (function evaluate() {
