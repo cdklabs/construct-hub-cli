@@ -5,6 +5,7 @@ const project = new TypeScriptAppProject({
   license: 'Apache-2.0',
   defaultReleaseBranch: 'main',
   minNodeVersion: '12.4.0',
+  workflowNodeVersion: '12.x',
 
   tsconfig: {
     compilerOptions: {
