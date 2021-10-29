@@ -157,7 +157,7 @@
           "exec": "yarn install --check-files"
         },
         {
-          "exec": "yarn upgrade @oclif/dev-cli @types/chalk @types/jest @types/node @types/uuid @typescript-eslint/eslint-plugin @typescript-eslint/parser eslint eslint-import-resolver-node eslint-import-resolver-typescript eslint-plugin-import jest jest-junit json-schema npm-check-updates ts-jest typescript @aws-sdk/client-s3 @aws-sdk/client-sfn @oclif/command @oclif/config @oclif/plugin-help chalk listr2 rxjs tslib uuid"
+          "exec": "yarn upgrade @oclif/dev-cli @types/chalk @types/jest @types/node @types/uuid @typescript-eslint/eslint-plugin @typescript-eslint/parser eslint eslint-import-resolver-node eslint-import-resolver-typescript eslint-plugin-import jest jest-junit json-schema npm-check-updates ts-jest typescript @aws-sdk/client-s3 @aws-sdk/client-sfn @aws-sdk/credential-provider-node @oclif/command @oclif/config @oclif/plugin-help chalk listr2 rxjs tslib uuid"
         },
         {
           "exec": "npx projen"

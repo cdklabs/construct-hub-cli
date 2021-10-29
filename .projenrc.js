@@ -26,6 +26,7 @@ const project = new TypeScriptAppProject({
   deps: [
     '@aws-sdk/client-s3',
     '@aws-sdk/client-sfn',
+    '@aws-sdk/credential-provider-node',
     '@oclif/command',
     '@oclif/config',
     '@oclif/plugin-help',

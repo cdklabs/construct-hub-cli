@@ -1,37 +1,38 @@
 import { hostname, userInfo } from 'os';
-import { S3Client, paginateListObjectsV2 } from '@aws-sdk/client-s3';
-import { SFNClient, StartExecutionCommand, paginateGetExecutionHistory, HistoryEvent, DescribeExecutionCommand } from '@aws-sdk/client-sfn';
+import { Readable } from 'stream';
+import { gunzipSync } from 'zlib';
+import { S3Client, paginateListObjectsV2, GetObjectCommand } from '@aws-sdk/client-s3';
+import { SFNClient, StartExecutionCommand, DescribeExecutionCommand } from '@aws-sdk/client-sfn';
+import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { Command, flags } from '@oclif/command';
 import chalk from 'chalk';
-import { Listr, ListrRendererFactory, ListrTask } from 'listr2';
-import { Observable, Subscriber } from 'rxjs';
+import { Listr } from 'listr2';
 import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
 
-export default class List extends Command {
-  public static readonly description: string = 'Lists packages in a ConstructHub instance';
+export default class RepairPackageData extends Command {
+  public static readonly description: string = 'Repairs package data in a ConstructHub instance';
   public static readonly flags = {
-    'package-data': flags.string({
+    'bucket': flags.string({
       description: 'The ConstructHub package data bucket name',
       helpValue: 'bucket-name',
       required: true,
     }),
-    'fix-using': flags.string({
+    'state-machine': flags.string({
       description: 'Attempt to fix packages that are missing documentation for one or more languages using the specified SFN State Machine',
-      helpValue: 'state-machine-arn',
+      helpValue: 'arn',
     }),
-    'fix-batches': flags.integer({
+    'batch-size': flags.integer({
       description: 'The number of elements to accumulate before running the SFN State Machine specified by --fix-using',
       default: 25,
-    }),
-    'fix-wait': flags.boolean({
-      description: 'Whether to wait for the StateMachine executions to complete before moving forward',
-      default: true,
-      allowNo: true,
     }),
     'languages': flags.string({
       description: 'The languages supported by the ConstructHub instance',
       multiple: true,
-      default: ['java', 'python', 'typescript'],
+      default: ['csharp', 'java', 'python', 'typescript'],
+    }),
+    'only-catalog': flags.boolean({
+      description: 'Whether to limit the process to versions present in the catalog object',
+      default: false,
     }),
     'help': flags.help({ char: 'h' }),
   };
@@ -39,27 +40,41 @@ export default class List extends Command {
   public async run() {
     const {
       flags: {
-        'fix-batches': fixBatchSize,
-        'fix-using': stateMachine,
-        'fix-wait': wait,
+        'batch-size': fixBatchSize,
+        'only-catalog': onlyCatalog,
+        'bucket': bucketName,
+        'state-machine': stateMachine,
         languages,
-        'package-data': bucketName,
       },
-    } = this.parse(List);
+    } = this.parse(RepairPackageData);
 
-    const S3 = new S3Client({});
-    const SFN = new SFNClient({});
+    const credentials = defaultProvider({ maxRetries: 10 });
+
+    const S3 = new S3Client({ credentials });
+    const SFN = new SFNClient({ credentials });
 
     const ns = uuidv4();
     const runningMachines = new Map<string, Promise<{ readonly arn: string; readonly status: string }>>();
     const highWaterMark = 50;
     const lowWaterMark = Math.max(0, highWaterMark - fixBatchSize);
 
-    const broken = new Array<PackageVersionStatus>();
-    for await (const prefix of this.packageVersionPrefixes(S3, bucketName)) {
+    const broken = new Array<[PackageVersionStatus, readonly string[]]>();
+    const packageVersionPrefixes = onlyCatalog
+      ?this.packageVersionPrefixesFromCatalog(S3, bucketName)
+      : this.packageVersionPrefixes(S3, bucketName);
+    for await (const prefix of packageVersionPrefixes) {
       const status = await this.processPackageVersion(S3, bucketName, prefix);
       if (!status.assemblyKey || !status.metadataKey || !status.tarballKey) {
-        console.error(`${chalk.blue.bold(status.name)}@${chalk.blue.bold(status.version)}`, chalk.red('has missing base objects'));
+        console.error(
+          `${chalk.blue.bold(status.name)}@${chalk.blue.bold(status.version)}`,
+          chalk.red('has missing base objects'),
+          ' - ',
+          [
+            `assembly: ${status.assemblyKey ? chalk.bgGreen('PRESENT') : chalk.bgRed('MISSING')}`,
+            `metadata: ${status.metadataKey ? chalk.bgGreen('PRESENT') : chalk.bgRed('MISSING')}`,
+            `tarball: ${status.tarballKey ? chalk.bgGreen('PRESENT') : chalk.bgRed('MISSING')}`,
+          ].join(', '),
+        );
         continue;
       }
       const missingLanguages = new Set<string>();
@@ -75,19 +90,17 @@ export default class List extends Command {
       }
       if (missingLanguages.size > 0) {
         console.log(`${chalk.blue.bold(status.name)}@${chalk.blue.bold(status.version)} is missing documents for ${Array.from(missingLanguages).map((l) => chalk.green(l)).join(', ')}`);
-        broken.push(status);
+        broken.push([status, Array.from(missingLanguages)]);
       }
 
       if (stateMachine && broken.length >= fixBatchSize) {
         if (runningMachines.size >= highWaterMark) {
           await this.waitForSettlements(runningMachines, lowWaterMark);
         }
-        const { executionArns } = await this.repairPackageVersions(SFN, bucketName, languages, stateMachine, broken, wait, ns);
-        if (!wait) {
+        const { executionArns } = await this.repairPackageVersions(SFN, bucketName, stateMachine, broken, ns);
           for (const arn of executionArns.values()) {
             runningMachines.set(arn, this.awaitStateMachineEnd(SFN, arn));
           }
-        }
         broken.splice(0, broken.length);
       }
     }
@@ -96,11 +109,9 @@ export default class List extends Command {
       if (runningMachines.size >= highWaterMark) {
         await this.waitForSettlements(runningMachines, lowWaterMark);
       }
-      const { executionArns } = await this.repairPackageVersions(SFN, bucketName, languages, stateMachine, broken, wait, ns);
-      if (!wait) {
-        for (const arn of executionArns.values()) {
-          runningMachines.set(arn, this.awaitStateMachineEnd(SFN, arn));
-        }
+      const { executionArns } = await this.repairPackageVersions(SFN, bucketName, stateMachine, broken, ns);
+      for (const arn of executionArns.values()) {
+        runningMachines.set(arn, this.awaitStateMachineEnd(SFN, arn));
       }
     }
   }
@@ -142,14 +153,12 @@ export default class List extends Command {
   private async repairPackageVersions(
     SFN: SFNClient,
     bucketName: string,
-    languages: readonly string[],
     stateMachine: string,
-    broken: readonly PackageVersionStatus[],
-    wait: boolean,
+    broken: readonly [PackageVersionStatus, readonly string[]][],
     ns: string,
   ) {
     return new Listr<{ executionArns: Map<string, string> }>(
-      broken.map((status) => {
+      broken.map(([status, missingLanguages]) => {
         const name = `${userInfo().username}-${uuidv5(`${status.name}@${status.version}`, ns)}`;
         return {
           title: `Repairing ${chalk.blue.bold(status.name)}@${chalk.blue.bold(status.version)}`,
@@ -165,24 +174,15 @@ export default class List extends Command {
                     'assembly': { key: status.assemblyKey },
                     'metadata': { key: status.metadataKey },
                     'package': { key: status.tarballKey },
+                    'languages': missingLanguages.reduce((selection, lang) => ({ ...selection, [lang]: true }), {}),
                     '#comment': `Triggered by construct-hub-cli by ${userInfo().username} on ${hostname()}`,
                   }, null, 2),
                 }));
                 if (executionArn) {
                   ctx.executionArns.set(name, executionArn);
-                  if (!wait) {
-                    fixItemTask.title += ` => ${chalk.yellow(executionArn)}`;
-                  }
+                  fixItemTask.title += ` => ${chalk.yellow(executionArn)}`;
                 }
                 return executionArn;
-              },
-            }, {
-              title: 'Monitor State Machine',
-              enabled: (ctx) => ctx.executionArns.has(name),
-              skip: !wait,
-              task: (ctx, monitorTask) => {
-                monitorTask.title = `Monitor: ${chalk.blue.underline(`https://console.aws.amazon.com/states/home#/executions/details/${ctx.executionArns.get(name)}`)}`;
-                return this.monitorStateMachine(SFN, ctx.executionArns.get(name)!, languages, monitorTask);
               },
             },
           ]),
@@ -192,130 +192,6 @@ export default class List extends Command {
         ctx: { executionArns: new Map<string, string>() },
         exitOnError: false,
       }).run();
-  }
-
-  private monitorStateMachine<Ctx, Renderer extends ListrRendererFactory>(
-    SFN: SFNClient,
-    executionArn: string,
-    languages: readonly string[],
-    parent: Parameters<ListrTask<Ctx, Renderer>['task']>[1],
-  ) {
-    const status = new Map<string, { readonly observable: Observable<any>; subscriber?: Subscriber<any> }>();
-    for (const language of languages) {
-      const observable = new Observable<any>((observer) => {
-        const entry = status.get(language);
-        if (entry) {
-          entry.subscriber = observer;
-        }
-      });
-      status.set(language, { observable });
-    }
-
-    function settle(language: string, reason?: any) {
-      if (!status.has(language)) {
-        return;
-      }
-      const { subscriber } = status.get(language)!;
-      if (reason) {
-        subscriber?.error(reason);
-      } else {
-        subscriber?.complete();
-      }
-      status.delete(language);
-    }
-
-    function update(language: string, message: string) {
-      if (!status.has(language)) {
-        return;
-      }
-      const { subscriber } = status.get(language)!;
-      subscriber?.next(message);
-    }
-
-    const tasks = parent.newListr([{
-      title: 'Wait for doc-gen to complete',
-      task: (_ctx, task) => task.newListr(
-        Array.from(status.entries()).map(([language, { observable }]) => ({
-          title: language,
-          // NOTE: Don't understand why "as any" is needed here. It complains Observable<any> is incomaptible with Observale<any>.
-          task: () => observable,
-        })),
-        { exitOnError: false, concurrent: true }),
-    }]);
-
-    setImmediate(trackExecution);
-
-    return tasks;
-
-    function trackExecution() {
-      const taskLanguage = new Map<number, string>();
-
-      function fail(cause: any) {
-        for (const language of status.keys()) {
-          settle(language, cause);
-        }
-      }
-
-      function handleNewEvents([events, nextSince]: [readonly HistoryEvent[], number]) {
-        for (const event of events) {
-          if (event.previousEventId && taskLanguage.has(event.previousEventId)) {
-            const language = taskLanguage.get(event.previousEventId)!;
-            taskLanguage.set(event.id!, language);
-            update(language, `[${chalk.green(event.timestamp?.toISOString())}] #${chalk.bold(event.id)} ${chalk.blue(event.type)}`);
-          }
-          switch (event.type) {
-            case 'ExecutionAborted':
-              return fail(new Error('State Machine execution aborted'));
-            case 'ExecutionFailed':
-              return fail(new Error('State Machine execution failed'));
-            case 'ExecutionSucceeded':
-              return fail(new Error('Execution completed before task finished...'));
-            case 'TaskStateEntered':
-              const matches = /^Generate ([^\s]+) docs$/.exec(event.stateEnteredEventDetails!.name!);
-              if (matches) {
-                const [, language] = matches;
-                update(language, `[${chalk.green(event.timestamp?.toISOString())}] #${chalk.bold(event.id)} ${chalk.blue(event.type)} => ${chalk.italic(event.stateEnteredEventDetails!.name)}`);
-                taskLanguage.set(event.id!, language);
-              }
-              break;
-            case 'TaskSucceeded':
-              if (taskLanguage.has(event.id!)) {
-                const language = taskLanguage.get(event.id!)!;
-                settle(language);
-              }
-              break;
-            case 'TaskStateExited':
-              // If not settled yet, then the task ran out of attempts & failed.
-              if (taskLanguage.has(event.id!)) {
-                const language = taskLanguage.get(event.id!)!;
-                settle(language, new Error('Ran out of attempts'));
-              }
-              break;
-          }
-        }
-        setTimeout(() => newEvents(nextSince).then(handleNewEvents, fail), 1_000);
-      };
-
-      async function newEvents(since: number = 0): Promise<[readonly HistoryEvent[], number]> {
-        const result = new Array<HistoryEvent>();
-        const paginator = paginateGetExecutionHistory({ client: SFN }, { executionArn, includeExecutionData: false, reverseOrder: true });
-        let nextSince = since;
-        for await (const { events = [] } of paginator) {
-          for (const event of events) {
-            if (event.id && event.id <= since) {
-              return [result.reverse(), nextSince];
-            }
-            result.push(event);
-            if (event.id && event.id > nextSince) {
-              nextSince = event.id;
-            }
-          }
-        }
-        return [result.reverse(), nextSince];
-      }
-
-      newEvents().then(handleNewEvents, fail);
-    }
   }
 
   private async *packageVersionPrefixes(S3: S3Client, bucketName: string, prefix = 'data/'): AsyncGenerator<string, void> {
@@ -340,6 +216,55 @@ export default class List extends Command {
           }
         }
       }
+    }
+  }
+
+  private async *packageVersionPrefixesFromCatalog(S3: S3Client, bucketName: string): AsyncGenerator<string, void> {
+    const { Body, ContentEncoding } = await S3.send(new GetObjectCommand({ Bucket: bucketName, Key: 'catalog.json' }));
+    if (!Body) {
+      return;
+    }
+
+    const buffer = await new Promise<any>(async (ok, ko) => {
+      if (isBlob(Body)) {
+        const buff = await Body.arrayBuffer();
+        ok(Buffer.from(buff));
+      } else if (Body instanceof Readable) {
+        Body.once('error', ko);
+        const chunks = new Array<Buffer>();
+        Body.once('close', () => {
+          try {
+            ok(Buffer.concat(chunks));
+          } catch (err) {
+            ko(err);
+          }
+        });
+        Body.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+      } else {
+        // Cannot be a Blob, as at this stage we established the Blob type does not even exist...
+        const reader = Body.getReader();
+        let result: Awaited<ReturnType<typeof reader.read>>;
+        const chunks = new Array<Buffer>();
+        do {
+          result = await reader.read();
+          if (result.value) {
+            chunks.push(Buffer.from(result.value));
+          }
+        } while (!result.done);
+        ok(Buffer.concat(chunks));
+      }
+    });
+
+    const catalog = JSON.parse(
+      (
+        ContentEncoding === 'gzip'
+          ? gunzipSync(buffer)
+          : buffer
+      ).toString('utf-8'),
+    );
+
+    for (const { name, version } of catalog.packages) {
+      yield `data/${name}/v${version}/`;
     }
   }
 
@@ -403,4 +328,15 @@ interface PackageVersionStatus {
 
   readonly docs: ReadonlyMap<string, DocStatus>;
   readonly submodules: ReadonlyMap<string, ReadonlyMap<string, DocStatus>>;
+}
+
+type Awaited<T> = T extends Promise<infer A> ? A : T;
+
+function isBlob(val: any): val is Blob {
+  try {
+    return val instanceof Blob;
+  } catch {
+    // We may receive "ReferenceError: Blob is not defined", in which case it CANNOT possibly be a Blob.
+    return false;
+  }
 }

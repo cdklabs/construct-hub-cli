@@ -9,7 +9,7 @@ ConstructHub or not (and if not, why).
 > supports and the format of the data they return is subject to change without
 > notice.
 
-## `construct-hub list`
+## `construct-hub repair-package-data`
 
 This command traverses the *package data* bucket of a ConstructHub instance and
 identified packages that are missing one or more language-specific documentation

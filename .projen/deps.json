@@ -84,6 +84,10 @@
       "type": "runtime"
     },
     {
+      "name": "@aws-sdk/credential-provider-node",
+      "type": "runtime"
+    },
+    {
       "name": "@oclif/command",
       "type": "runtime"
     },
