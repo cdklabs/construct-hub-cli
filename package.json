@@ -20,6 +20,11 @@
     "upgrade-projen": "npx projen upgrade-projen",
     "projen": "npx projen"
   },
+  "author": {
+    "name": "Amazon Web Services, Inc.",
+    "email": "construct-ecosystem-team@amazon.com",
+    "organization": true
+  },
   "devDependencies": {
     "@oclif/dev-cli": "^1.26.0",
     "@types/chalk": "^2.2.0",

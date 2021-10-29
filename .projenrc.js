@@ -3,6 +3,9 @@ const { TypeScriptAppProject } = require('projen');
 const project = new TypeScriptAppProject({
   name: 'construct-hub-cli',
   license: 'Apache-2.0',
+  authorName: 'Amazon Web Services, Inc.',
+  authorEmail: 'construct-ecosystem-team@amazon.com',
+  authorOrganization: true,
   defaultReleaseBranch: 'main',
   minNodeVersion: '12.4.0',
   workflowNodeVersion: '12.x',
