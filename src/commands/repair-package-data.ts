@@ -98,9 +98,9 @@ export default class RepairPackageData extends Command {
           await this.waitForSettlements(runningMachines, lowWaterMark);
         }
         const { executionArns } = await this.repairPackageVersions(SFN, bucketName, stateMachine, broken, ns);
-          for (const arn of executionArns.values()) {
-            runningMachines.set(arn, this.awaitStateMachineEnd(SFN, arn));
-          }
+        for (const arn of executionArns.values()) {
+          runningMachines.set(arn, this.awaitStateMachineEnd(SFN, arn));
+        }
         broken.splice(0, broken.length);
       }
     }
