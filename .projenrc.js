@@ -1,6 +1,6 @@
-const { TypeScriptAppProject } = require('projen');
+const { typescript } = require('projen');
 
-const project = new TypeScriptAppProject({
+const project = new typescript.TypeScriptAppProject({
   name: 'construct-hub-cli',
   license: 'Apache-2.0',
   authorName: 'Amazon Web Services, Inc.',

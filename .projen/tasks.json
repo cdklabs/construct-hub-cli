@@ -1,5 +1,29 @@
 {
   "tasks": {
+    "build": {
+      "name": "build",
+      "description": "Full release build",
+      "steps": [
+        {
+          "spawn": "default"
+        },
+        {
+          "spawn": "pre-compile"
+        },
+        {
+          "spawn": "compile"
+        },
+        {
+          "spawn": "post-compile"
+        },
+        {
+          "spawn": "test"
+        },
+        {
+          "spawn": "package"
+        }
+      ]
+    },
     "clobber": {
       "name": "clobber",
       "description": "hard resets to HEAD of origin and cleans the local repo",
@@ -32,22 +56,6 @@
       ],
       "condition": "git diff --exit-code > /dev/null"
     },
-    "prepack": {
-      "name": "prepack",
-      "steps": [
-        {
-          "exec": "rm -rf lib && tsc -b && oclif-dev manifest && oclif-dev readme"
-        }
-      ]
-    },
-    "postpack": {
-      "name": "postpack",
-      "steps": [
-        {
-          "exec": "rm -f oclif.manifest.json"
-        }
-      ]
-    },
     "compile": {
       "name": "compile",
       "description": "Only compile",
@@ -57,42 +65,61 @@
         }
       ]
     },
+    "default": {
+      "name": "default",
+      "description": "Synthesize project files",
+      "steps": [
+        {
+          "exec": "node .projenrc.js"
+        }
+      ]
+    },
+    "eslint": {
+      "name": "eslint",
+      "description": "Runs eslint against the codebase",
+      "steps": [
+        {
+          "exec": "eslint --ext .ts,.tsx --fix --no-error-on-unmatched-pattern src test build-tools .projenrc.js"
+        }
+      ]
+    },
+    "package": {
+      "name": "package",
+      "description": "Creates the distribution package"
+    },
+    "post-compile": {
+      "name": "post-compile",
+      "description": "Runs after successful compilation"
+    },
+    "postpack": {
+      "name": "postpack",
+      "steps": [
+        {
+          "exec": "rm -f oclif.manifest.json"
+        }
+      ]
+    },
+    "pre-compile": {
+      "name": "pre-compile",
+      "description": "Prepare the project for compilation"
+    },
+    "prepack": {
+      "name": "prepack",
+      "steps": [
+        {
+          "exec": "rm -rf lib && tsc -b && oclif-dev manifest && oclif-dev readme"
+        }
+      ]
+    },
     "test": {
       "name": "test",
       "description": "Run tests",
       "steps": [
         {
-          "exec": "rm -fr lib/"
-        },
-        {
           "exec": "jest --passWithNoTests --all --updateSnapshot"
         },
         {
           "spawn": "eslint"
-        }
-      ]
-    },
-    "build": {
-      "name": "build",
-      "description": "Full release build (test+compile)",
-      "steps": [
-        {
-          "exec": "npx projen"
-        },
-        {
-          "spawn": "test"
-        },
-        {
-          "spawn": "compile"
-        }
-      ]
-    },
-    "test:watch": {
-      "name": "test:watch",
-      "description": "Run jest in watch mode",
-      "steps": [
-        {
-          "exec": "jest --watch"
         }
       ]
     },
@@ -105,29 +132,12 @@
         }
       ]
     },
-    "default": {
-      "name": "default",
+    "test:watch": {
+      "name": "test:watch",
+      "description": "Run jest in watch mode",
       "steps": [
         {
-          "exec": "node .projenrc.js"
-        }
-      ]
-    },
-    "watch": {
-      "name": "watch",
-      "description": "Watch & compile in the background",
-      "steps": [
-        {
-          "exec": "tsc --build -w"
-        }
-      ]
-    },
-    "eslint": {
-      "name": "eslint",
-      "description": "Runs eslint against the codebase",
-      "steps": [
-        {
-          "exec": "eslint --ext .ts,.tsx --fix --no-error-on-unmatched-pattern src test build-tools .projenrc.js"
+          "exec": "jest --watch"
         }
       ]
     },
@@ -157,7 +167,7 @@
           "exec": "yarn install --check-files"
         },
         {
-          "exec": "yarn upgrade @oclif/dev-cli @types/chalk @types/jest @types/node @types/uuid @typescript-eslint/eslint-plugin @typescript-eslint/parser eslint eslint-import-resolver-node eslint-import-resolver-typescript eslint-plugin-import jest jest-junit json-schema npm-check-updates ts-jest typescript @aws-sdk/client-s3 @aws-sdk/client-sfn @aws-sdk/credential-provider-node @oclif/command @oclif/config @oclif/plugin-help chalk listr2 rxjs tslib uuid"
+          "exec": "yarn upgrade @oclif/dev-cli @types/chalk @types/jest @types/node @types/uuid @typescript-eslint/eslint-plugin @typescript-eslint/parser eslint-import-resolver-node eslint-import-resolver-typescript eslint-plugin-import eslint jest jest-junit json-schema npm-check-updates ts-jest typescript @aws-sdk/client-s3 @aws-sdk/client-sfn @aws-sdk/credential-provider-node @oclif/command @oclif/config @oclif/plugin-help chalk listr2 rxjs tslib uuid"
         },
         {
           "exec": "npx projen"
@@ -194,6 +204,15 @@
         },
         {
           "exec": "npx projen"
+        }
+      ]
+    },
+    "watch": {
+      "name": "watch",
+      "description": "Watch & compile in the background",
+      "steps": [
+        {
+          "exec": "tsc --build -w"
         }
       ]
     }
